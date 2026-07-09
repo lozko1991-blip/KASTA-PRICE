@@ -1,0 +1,76 @@
+name: Master Kasta Feed Update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'MASTER PRICE KASTA/masterkastaxml.py'
+      - 'кОЛЬОРИ КАСТА.xlsx'
+      - 'MASTER PRICE KASTA/blacklist.txt'
+
+  schedule:
+    - cron: '0 */4 * * *'
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: master-kasta-feed
+  cancel-in-progress: false
+
+jobs:
+  build_master_feed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests lxml openpyxl
+
+      - name: Run Master Kasta Script
+        working-directory: 'MASTER PRICE KASTA'
+        run: python masterkastaxml.py
+
+      - name: Save REPORT and logs to repo
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "MASTER PRICE KASTA/KASTA_REPORT.md" "MASTER PRICE KASTA/kasta_price_warnings.log" --force
+          git diff --staged --quiet && { echo "Немає змін у звіті — пропускаємо"; exit 0; }
+          git commit -m "Auto update: kasta report"
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main && git push && { echo "Push успішний (спроба $attempt)"; exit 0; }
+            echo "Push не вдався (спроба $attempt) — повтор через 5с"
+            sleep 5
+          done
+          echo "Push не вдався після 3 спроб"
+          exit 1
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build_master_feed
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
