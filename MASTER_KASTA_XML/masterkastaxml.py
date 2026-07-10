@@ -704,9 +704,13 @@ def process():
             category_id_map[new_id] = domain
             cat.set('id', new_id)
 
-            if cat.get('parentId'):
-                parent = cat.get('parentId')
+            parent = cat.get('parentId') or cat.get('parent_id') or cat.get('parentID')
+            if parent:
                 cat.set('parentId', f"{prefix}{parent}" if prefix else parent)
+                if 'parent_id' in cat.attrib:
+                    del cat.attrib['parent_id']
+                if 'parentID' in cat.attrib:
+                    del cat.attrib['parentID']
 
             if cat.text:
                 cat_text_clean = " ".join(fix_text(cat.text).split())
