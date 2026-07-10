@@ -2,6 +2,7 @@ import argparse
 import os
 import re
 import requests
+import json
 import lxml.etree as ET
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -17,7 +18,6 @@ def load_xml(source):
         print(f"Downloading XML from URL: {source} ...")
         r = requests.get(source, timeout=60)
         r.raise_for_status()
-        # Parse from string bytes to avoid encoding mismatches
         return ET.fromstring(r.content)
     else:
         print(f"Loading local XML file: {source} ...")
@@ -28,7 +28,6 @@ def load_xml(source):
 
 def build_category_map(root):
     category_map = {}
-    # Find all category tags (YML standard)
     for cat in root.xpath("//category"):
         cat_id = cat.get("id")
         if cat_id:
@@ -39,81 +38,72 @@ def build_category_map(root):
     return category_map
 
 def extract_offers(root):
-    # Check if we have YML offers
     offers = root.xpath("//offer")
     if not offers:
-        # Check if we have RSS items
         offers = root.xpath("//item")
     if not offers:
-        # Generic fallback: any elements that look like products (e.g. elements inside a root)
-        # We can look for tags that are commonly used
         offers = root.xpath("//product")
     return offers
 
 def clean_text(text):
     if not text:
         return ""
-    # Strip basic control characters
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', str(text))
     return text.strip()
 
-def process_offer(offer, category_map):
-    # 1. Offer ID
+def process_offer(offer, category_map, mapping_rules):
     offer_id = offer.get("id") or offer.findtext("id") or offer.findtext("{http://base.google.com/ns/1.0}id") or ""
     offer_id = clean_text(offer_id)
     
-    # Extract prefix if ID is formatted like 1000_1234
     prefix = ""
     if "_" in offer_id:
         parts = offer_id.split("_")
         if parts[0].isdigit():
             prefix = parts[0]
 
-    # 2. Name
     name = (offer.findtext("name_ua") or 
             offer.findtext("name") or 
             offer.findtext("title") or 
             offer.findtext("{http://base.google.com/ns/1.0}title") or "")
     name = clean_text(name)
     
-    # 3. Description
     desc = (offer.findtext("description_ua") or 
             offer.findtext("description") or 
             offer.findtext("{http://base.google.com/ns/1.0}description") or "")
     desc = clean_text(desc)
     
-    # 4. Price and Old Price
     price = offer.findtext("price") or offer.findtext("{http://base.google.com/ns/1.0}price") or "0"
     price_old = offer.findtext("price_old") or offer.findtext("oldprice") or offer.findtext("{http://base.google.com/ns/1.0}sale_price") or ""
     
     price = clean_text(price)
     price_old = clean_text(price_old)
     
-    # 5. Quantity and Availability
     qty = offer.findtext("stock_quantity") or offer.findtext("quantity") or offer.findtext("{http://base.google.com/ns/1.0}quantity") or ""
     qty = clean_text(qty)
     
     available = offer.get("available") or offer.findtext("available") or offer.findtext("{http://base.google.com/ns/1.0}availability") or "true"
     available = clean_text(available)
     
-    # 6. Vendor
     vendor = offer.findtext("vendor") or offer.findtext("brand") or offer.findtext("{http://base.google.com/ns/1.0}brand") or ""
     vendor = clean_text(vendor)
     
-    # 7. Category
     cat_id = offer.findtext("categoryId") or offer.findtext("category_id") or offer.findtext("{http://base.google.com/ns/1.0}product_type") or ""
     cat_id = clean_text(cat_id)
     cat_name = ""
     if cat_id and cat_id in category_map:
         cat_name = category_map[cat_id]["name"]
         
-    # 8. Pictures
+    # Pre-fill from historical memory rules
+    new_cat_id = ""
+    new_cat_name = ""
+    if cat_id in mapping_rules:
+        new_cat_id = mapping_rules[cat_id].get("new_id", "")
+        new_cat_name = mapping_rules[cat_id].get("new_name", "")
+        
     pics = []
-    # Check YML standard <picture> tags
     for p in offer.findall("picture"):
         if p.text:
             pics.append(clean_text(p.text))
-    # Check Google XML standard <g:image_link> and <g:additional_image_link>
     g_img = offer.findtext("{http://base.google.com/ns/1.0}image_link")
     if g_img:
         pics.append(clean_text(g_img))
@@ -123,12 +113,10 @@ def process_offer(offer, category_map):
             
     pictures_str = ",".join(pics)
     
-    # 9. Parameters (Color, Size, and Others)
     color_val = ""
     size_val = ""
     other_params = []
     
-    # YML standard parameters
     for param in offer.findall("param"):
         p_name = (param.get("name") or "").strip()
         p_val = (param.text or "").strip()
@@ -143,7 +131,6 @@ def process_offer(offer, category_map):
         else:
             other_params.append(f"{p_name}: {p_val}")
             
-    # Google standard attributes
     g_color = offer.findtext("{http://base.google.com/ns/1.0}color")
     if g_color:
         color_val = clean_text(g_color)
@@ -165,8 +152,8 @@ def process_offer(offer, category_map):
         "Бренд": vendor,
         "ID Поточної Категорії": cat_id,
         "Назва Поточної Категорії": cat_name,
-        "ID НОВОЇ Категорії": "",     # Empty for mapping
-        "Назва НОВОЇ Категорії": "",   # Empty for mapping
+        "ID НОВОЇ Категорії": new_cat_id,
+        "Назва НОВОЇ Категорії": new_cat_name,
         "Посилання на фото": pictures_str,
         "Колір": color_val,
         "Розмір": size_val,
@@ -176,6 +163,17 @@ def process_offer(offer, category_map):
 def main():
     args = parse_args()
     
+    # Load category memory if exists
+    mapping_rules = {}
+    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_mapping_rules.json")
+    if os.path.exists(rules_path):
+        try:
+            with open(rules_path, "r", encoding="utf-8") as f:
+                mapping_rules = json.load(f)
+            print(f"Loaded {len(mapping_rules)} category mapping rules from history.")
+        except Exception as e:
+            print(f"Could not load category memory: {e}")
+            
     try:
         root = load_xml(args.input)
     except Exception as e:
@@ -199,7 +197,6 @@ def main():
         "Посилання на фото", "Колір", "Розмір", "Інші Характеристики"
     ]
     
-    # Styling variables
     header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     center_align = Alignment(horizontal="center", vertical="center", wrap_text=False)
@@ -211,7 +208,6 @@ def main():
         bottom=Side(style='thin', color='D3D3D3')
     )
     
-    # Write headers
     ws.append(headers)
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num)
@@ -220,15 +216,13 @@ def main():
         cell.alignment = center_align
         cell.border = thin_border
         
-    # Write data
     row_count = 0
     for offer in offers:
-        row_data = process_offer(offer, category_map)
+        row_data = process_offer(offer, category_map, mapping_rules)
         row_list = [row_data[h] for h in headers]
         ws.append(row_list)
         row_count += 1
         
-        # Apply basic cell borders and alignments
         current_row = ws.max_row
         for col_num in range(1, len(headers) + 1):
             cell = ws.cell(row=current_row, column=col_num)
@@ -241,7 +235,6 @@ def main():
         if row_count % 1000 == 0:
             print(f"Processed {row_count} items...")
             
-    # Set reasonable column widths
     ws.column_dimensions["A"].width = 15  # Offer ID
     ws.column_dimensions["B"].width = 10  # Prefix
     ws.column_dimensions["C"].width = 45  # Назва
@@ -253,15 +246,14 @@ def main():
     ws.column_dimensions["I"].width = 15  # Бренд
     ws.column_dimensions["J"].width = 22  # ID поточної кат
     ws.column_dimensions["K"].width = 28  # Назва поточної кат
-    ws.column_dimensions["L"].width = 22  # ID нової кат (Highlight fill for mapping)
+    ws.column_dimensions["L"].width = 22  # ID нової кат
     ws.column_dimensions["M"].width = 28  # Назва нової кат
     ws.column_dimensions["N"].width = 30  # Посилання на фото
     ws.column_dimensions["O"].width = 15  # Колір
     ws.column_dimensions["P"].width = 15  # Розмір
     ws.column_dimensions["Q"].width = 40  # Інші характеристики
     
-    # Highlight new mapping columns to make them pop out
-    highlight_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid") # light yellow
+    highlight_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
     for r in range(2, ws.max_row + 1):
         ws.cell(row=r, column=12).fill = highlight_fill
         ws.cell(row=r, column=13).fill = highlight_fill
