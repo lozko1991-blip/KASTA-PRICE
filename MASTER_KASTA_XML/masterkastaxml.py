@@ -1034,19 +1034,13 @@ def process():
         xml_bytes = ET.tostring(yml, encoding='UTF-8', xml_declaration=True, pretty_print=True)
         xml_bytes = xml_bytes.replace(
             b"<?xml version='1.0' encoding='UTF-8'?>\n",
-            b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE yml_catalog SYSTEM "shops.dtd">\n',
+            b'<?xml version="1.0" encoding="UTF-8"?>\n',
             1
         )
         xml_bytes = xml_bytes.replace(
             b'<?xml version="1.0" encoding="UTF-8"?>\n<?xml',
             b'<?xml'
         )
-        if b'<!DOCTYPE' not in xml_bytes:
-            xml_bytes = xml_bytes.replace(
-                b'<?xml version="1.0" encoding="UTF-8"?>\n',
-                b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE yml_catalog SYSTEM "shops.dtd">\n',
-                1
-            )
         f.write(xml_bytes)
     print(f"[XML] Сгенеровано файл {output_filename}")
 
