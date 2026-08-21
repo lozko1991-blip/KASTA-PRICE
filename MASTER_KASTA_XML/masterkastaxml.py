@@ -824,14 +824,14 @@ def process():
                     count_price_err += 1
                     continue
 
-                vendor  = fix_text(offer.findtext('vendor') or '') or 'NoBrand'
+                vendor  = fix_text(offer.findtext('vendor') or '') or 'No Brand'
                 name_ua = ru_to_ua(get_name(offer))
 
                 if not name_ua or len(name_ua.strip()) < 3:
                     count_price_err += 1
                     continue
 
-                if vendor != 'NoBrand' and vendor.lower() not in name_ua.lower():
+                if vendor != 'No Brand' and vendor.lower() not in name_ua.lower():
                     name_ua = f"{name_ua} {vendor}"
 
                 desc_raw = get_description(offer)
@@ -844,6 +844,9 @@ def process():
 
                 ET.SubElement(new_off, "price").text          = str(price)
                 ET.SubElement(new_off, "price_old").text      = str(old_price)
+                promo_p = round(price * 0.95)
+                if promo_p < price:
+                    ET.SubElement(new_off, "price_promo").text = str(promo_p)
                 ET.SubElement(new_off, "stock_quantity").text = str(min(qty, 9999))
                 ET.SubElement(new_off, "currencyId").text     = "UAH"
                 ET.SubElement(new_off, "categoryId").text     = cat_id
