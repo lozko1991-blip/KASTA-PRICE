@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'websklad-processor.js'
+      - 'test-websklad.js'
+      - '.github/workflows/websklad.yml'
+      - 'WEBSKLAD_RULES.md'
   schedule:
     # Кожні 4 години
     - cron: '0 */4 * * *'
@@ -31,6 +36,9 @@ jobs:
 
       - name: Run websklad processor
         run: node websklad-processor.js
+
+      - name: Run automated KASTA tests & feed validation
+        run: node test-websklad.js websklad.xml
 
       - name: Push websklad.xml → feeds-websklad branch
         run: |
