@@ -141,7 +141,7 @@ function ensureSize(offerXml) {
   return offerXml.replace(/<\/offer>\s*$/i, '<size>-</size></offer>');
 }
 
-// ─── Націнка: 45%+40 грн (<=1000), 40%+50 грн (>1000) ────────────────────────
+// ─── Націнка: 45%+40 грн (<=1000), 40%+50 грн (>1000), old_price (+20%), price_promo (-5%) ───
 function applyMarkup(offerXml) {
   const mPrice = offerXml.match(/<price\b[^>]*>([\s\S]*?)<\/price>/i);
   if (!mPrice) return offerXml;
@@ -149,23 +149,28 @@ function applyMarkup(offerXml) {
   const srcPrice = Number(String(mPrice[1] ?? '').trim().replace(',', '.'));
   if (!Number.isFinite(srcPrice) || srcPrice <= 0) return offerXml;
 
-  // Розрахунок нової ціни
+  // 1. Нова ціна продажу: 45%+40 грн (<=1000) або 40%+50 грн (>1000)
   const newPrice = srcPrice <= 1000
     ? Math.round(srcPrice * 1.45 + 40)
     : Math.round(srcPrice * 1.40 + 50);
 
-  let out = offerXml.replace(/<price\b[^>]*>[\s\S]*?<\/price>/i, `<price>${newPrice}</price>`);
+  // 2. Стара ціна (закреслена) — строго на 20% дорожча за ціну продажу
+  const oldPrice = Math.round(newPrice * 1.20);
 
-  // Коригування старої ціни (oldprice), щоб гарантувати oldprice > price для Kasta
-  out = out.replace(/<oldprice\b[^>]*>([\s\S]*?)<\/oldprice>/gi, (_, val) => {
-    const srcOld = Number(String(val).trim().replace(',', '.'));
-    if (!Number.isFinite(srcOld)) return '';
-    const computedOld = srcOld <= 1000
-      ? Math.round(srcOld * 1.45 + 40)
-      : Math.round(srcOld * 1.40 + 50);
-    const finalOld = computedOld > newPrice ? computedOld : Math.round(newPrice * 1.20);
-    return `<oldprice>${finalOld}</oldprice>`;
-  });
+  // 3. Промо-ціна — на 5% дешевша за ціну продажу
+  const promoPrice = Math.round(newPrice * 0.95);
+
+  let out = offerXml;
+
+  // Видаляємо попередні теги цін якщо були
+  out = out.replace(/\s*<oldprice\b[^>]*>[\s\S]*?<\/oldprice>/gi, '');
+  out = out.replace(/\s*<old_price\b[^>]*>[\s\S]*?<\/old_price>/gi, '');
+  out = out.replace(/\s*<price_promo\b[^>]*>[\s\S]*?<\/price_promo>/gi, '');
+
+  // Формуємо повний блок цін для KASTA
+  const priceBlock = `<price>${newPrice}</price>\n        <old_price>${oldPrice}</old_price>\n        <oldprice>${oldPrice}</oldprice>\n        <price_promo>${promoPrice}</price_promo>`;
+
+  out = out.replace(/<price\b[^>]*>[\s\S]*?<\/price>/i, priceBlock);
 
   return out;
 }
@@ -178,10 +183,28 @@ function getPrice(offerXml) {
   return Number.isFinite(p) ? p : null;
 }
 
+// ─── Фільтр наявності: тільки товари в наявності ──────────────────────────────
 function isAvailable(offerXml) {
+  // 1. available="false" або <available>false</available>
   if (/\bavailable\s*=\s*["']false["']/i.test(offerXml)) return false;
-  const m = offerXml.match(/<available\b[^>]*>([\s\S]*?)<\/available>/i);
-  return !(m && String(m[1]).trim().toLowerCase() === 'false');
+  const mAvail = offerXml.match(/<available\b[^>]*>([\s\S]*?)<\/available>/i);
+  if (mAvail && String(mAvail[1]).trim().toLowerCase() === 'false') return false;
+
+  // 2. in_stock="false" або <in_stock>false</in_stock>
+  if (/\bin_stock\s*=\s*["']false["']/i.test(offerXml)) return false;
+  const mStock = offerXml.match(/<in_stock\b[^>]*>([\s\S]*?)<\/in_stock>/i);
+  if (mStock && String(mStock[1]).trim().toLowerCase() === 'false') return false;
+
+  // 3. Залишок 0 або менше
+  const mQty = offerXml.match(/<(?:quantity|stock_quantity)\b[^>]*>(\d+)<\/(?:quantity|stock_quantity)>/i);
+  if (mQty && Number(mQty[1]) <= 0) return false;
+
+  // 4. Текстовий статус відсутності в param
+  if (/<param\s+name=["'](?:Наявність|Наличие|Статус|Stock)["'][^>]*>[\s\S]*?(?:немає|нет|закінчи|out of stock|під замовлення)[\s\S]*?<\/param>/i.test(offerXml)) {
+    return false;
+  }
+
+  return true;
 }
 
 // ─── Обробка одного офера ─────────────────────────────────────────────────────
