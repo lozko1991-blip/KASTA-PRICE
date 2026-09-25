@@ -141,14 +141,33 @@ function ensureSize(offerXml) {
   return offerXml.replace(/<\/offer>\s*$/i, '<size>-</size></offer>');
 }
 
-// ─── Ціна +50 грн якщо < 600 ─────────────────────────────────────────────────
+// ─── Націнка: 45%+40 грн (<=1000), 40%+50 грн (>1000) ────────────────────────
 function applyMarkup(offerXml) {
-  const re = /<price\b[^>]*>([\s\S]*?)<\/price>/i;
-  const m = offerXml.match(re);
-  if (!m) return offerXml;
-  const p = Number(String(m[1] ?? '').trim().replace(',', '.'));
-  if (!Number.isFinite(p) || p >= 600) return offerXml;
-  return offerXml.replace(re, `<price>${Math.round(p + 50)}</price>`);
+  const mPrice = offerXml.match(/<price\b[^>]*>([\s\S]*?)<\/price>/i);
+  if (!mPrice) return offerXml;
+
+  const srcPrice = Number(String(mPrice[1] ?? '').trim().replace(',', '.'));
+  if (!Number.isFinite(srcPrice) || srcPrice <= 0) return offerXml;
+
+  // Розрахунок нової ціни
+  const newPrice = srcPrice <= 1000
+    ? Math.round(srcPrice * 1.45 + 40)
+    : Math.round(srcPrice * 1.40 + 50);
+
+  let out = offerXml.replace(/<price\b[^>]*>[\s\S]*?<\/price>/i, `<price>${newPrice}</price>`);
+
+  // Коригування старої ціни (oldprice), щоб гарантувати oldprice > price для Kasta
+  out = out.replace(/<oldprice\b[^>]*>([\s\S]*?)<\/oldprice>/gi, (_, val) => {
+    const srcOld = Number(String(val).trim().replace(',', '.'));
+    if (!Number.isFinite(srcOld)) return '';
+    const computedOld = srcOld <= 1000
+      ? Math.round(srcOld * 1.45 + 40)
+      : Math.round(srcOld * 1.40 + 50);
+    const finalOld = computedOld > newPrice ? computedOld : Math.round(newPrice * 1.20);
+    return `<oldprice>${finalOld}</oldprice>`;
+  });
+
+  return out;
 }
 
 // ─── Допоміжні фільтри ────────────────────────────────────────────────────────
